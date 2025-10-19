@@ -1,173 +1,128 @@
-!DOCTYPE html
-html lang=zh-TW
-head
-    meta charset=UTF-8
-    title加密貨幣即時換倉提示 (CryptoCompare 修復版)title
-    script src=httpscdn.jsdelivr.netnpmchart.jsscript
-    style
-        body { font-family Arial, sans-serif; margin 20px; background-color #f9f9f9; }
-        h1 { text-align center; color #333; }
-        #instructions { max-width 800px; margin 20px auto; padding 10px; background #e0f7fa; border-radius 5px; }
-        #alert { background-color #ffcccc; padding 15px; font-size 18px; text-align center; display none; border 2px solid #ff5555; border-radius 5px; }
-        #error { background-color #ffffcc; padding 10px; font-size 14px; text-align center; display none; border 1px solid #ffaa00; border-radius 5px; }
-        #prices { margin 20px 0; }
-        table { border-collapse collapse; width 80%; margin auto; }
-        th, td { border 1px solid #ddd; padding 10px; text-align center; }
-        th { background-color #4CAF50; color white; }
-        .highlight { background-color #ff5555; color white; }
-        canvas { max-width 800px; margin 20px auto; }
-        #lastUpdate { text-align center; font-size 14px; color #555; }
-        #refresh { display block; margin 10px auto; padding 10px 20px; background #4CAF50; color white; border none; border-radius 5px; cursor pointer; }
-        #refreshhover { background #45a049; }
-    style
-head
-body
-    h1加密貨幣即時換倉提示 (BTCETHSOLSUILTC)h1
-    div id=instructions
-        pb使用說明b：每 10 分鐘檢查 CryptoCompare API 的 1 小時、3 天、7 天漲幅（SUI 若無歷史用近似）。漲幅後顯示價格變動 (USD)。若某幣任一時間段遠超，顯示紅色警報。點「刷新」測試。注意：交易風險，請模擬！p
-    div
-    button id=refresh onclick=updateData()立即刷新button
-    div id=errordiv
-    div id=alertdiv
-    div id=pricesdiv
-    div id=lastUpdatediv
-    canvas id=returnsChartcanvas
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>加密貨幣即時換倉提示 (修復版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f9f9f9; }
+        h1 { text-align: center; color: #333; }
+        #instructions { max-width: 800px; margin: 20px auto; padding: 10px; background: #e0f7fa; border-radius: 5px; }
+        #alert { background-color: #ffcccc; padding: 15px; font-size: 18px; text-align: center; display: none; border: 2px solid #ff5555; border-radius: 5px; }
+        #error { background-color: #ffffcc; padding: 10px; font-size: 14px; text-align: center; display: none; border: 1px solid #ffaa00; border-radius: 5px; }
+        #prices { margin: 20px 0; }
+        table { border-collapse: collapse; width: 80%; margin: auto; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+        th { background-color: #4CAF50; color: white; }
+        .highlight { background-color: #ff5555; color: white; }
+        canvas { max-width: 800px; margin: 20px auto; }
+        #lastUpdate { text-align: center; font-size: 14px; color: #555; }
+        #refresh { display: block; margin: 10px auto; padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #refresh:hover { background: #45a049; }
+    </style>
+</head>
+<body>
+    <h1>加密貨幣即時換倉提示 (BTC/ETH/SOL/SUI/LTC)</h1>
+    <div id="instructions">
+        <p><b>使用說明</b>：每 10 分鐘檢查 CryptoCompare API 的 1 小時、3 天、7 天漲幅（SUI 若無歷史用近似）。漲幅後顯示價格變動 (USD)。若某幣任一時間段遠超，顯示紅色警報。點「刷新」測試。注意：交易風險，請模擬！</p>
+    </div>
+    <button id="refresh" onclick="updateData()">立即刷新</button>
+    <div id="error"></div>
+    <div id="alert"></div>
+    <div id="prices"></div>
+    <div id="lastUpdate"></div>
+    <canvas id="returnsChart"></canvas>
 
-    script
+    <script>
         const symbols = ['BTC', 'ETH', 'SOL', 'SUI', 'LTC'];
-        const API_KEY = '263038e60a28b70ca6275c1cc14b24bdc685299be990279849c5ada3cff3f1f4';  你的 Key
-        const CORS_PROXY = 'httpscors-anywhere.herokuapp.com';  公開 CORS 代理
+        const API_KEY = '263038e60a28b70ca6275c1cc14b24bdc685299be990279849c5ada3cff3f1f4';
         let chart;
 
-         代理 API 請求
+        // 直接 fetch（GitHub Pages 支援）
         async function fetchAPI(endpoint) {
             try {
-                const response = await fetch(CORS_PROXY + endpoint);
-                const data = await response.json();
-                if (response.ok) {
-                    return data;
-                }
-                throw new Error(`Status ${response.status}, Message ${data.Message  'Unknown'}`);
+                const response = await fetch(endpoint);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
             } catch (e) {
-                console.error(`API error ${e}`);
+                console.error(`API error: ${e}`);
                 return null;
             }
         }
 
-         CryptoCompare 即時價格
+        // 即時價格
         async function getCCPriceData(symbols) {
-            const url = `httpsmin-api.cryptocompare.comdatapricemultifsyms=${symbols.join(',')}&tsyms=USD&api_key=${API_KEY}`;
-            for (let retry = 0; retry  2; retry++) {
-                const data = await fetchAPI(url);
-                if (data && !data.Response) return data;
-                await new Promise(resolve = setTimeout(resolve, 2000));
-            }
-            return null;
+            const url = `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${symbols.join(',')}&tsyms=USD&api_key=${API_KEY}`;
+            return await fetchAPI(url);
         }
 
-         CryptoCompare 小時歷史
+        // 歷史數據
         async function getCCHistoricalData(symbol, hours) {
-            const url = `httpsmin-api.cryptocompare.comdatav2histohourfsym=${symbol}&tsym=USD&limit=${hours}&api_key=${API_KEY}`;
-            for (let retry = 0; retry  2; retry++) {
-                const data = await fetchAPI(url);
-                if (data && data.Response === 'Success') {
-                    return data.Data.Data.map(d = ({ time d.time  1000, price d.close }));
-                }
-                await new Promise(resolve = setTimeout(resolve, 2000));
+            const url = `https://min-api.cryptocompare.com/data/v2/histohour?fsym=${symbol}&tsym=USD&limit=${hours}&api_key=${API_KEY}`;
+            const data = await fetchAPI(url);
+            if (data && data.Response === 'Success') {
+                return data.Data.Data.map(d => ({ time: d.time * 1000, price: d.close }));
             }
             return null;
         }
 
-         計算漲幅
+        // 計算漲幅
         function calculateReturn(prices, hours) {
-            if (!prices  prices.length  hours) return null;
+            if (!prices || prices.length < hours) return { return: 0, change: 0 };
             const startPrice = prices[prices.length - hours].price;
             const endPrice = prices[prices.length - 1].price;
             return {
-                return (endPrice - startPrice)  startPrice,
-                change endPrice - startPrice
+                return: (endPrice - startPrice) / startPrice,
+                change: endPrice - startPrice
             };
         }
 
-         更新數據
+        // 更新數據
         async function updateData() {
             document.getElementById('error').style.display = 'none';
             const marketData = {};
             let errorMsg = '';
 
-             獲取即時價格
             const ccPrices = await getCCPriceData(symbols);
             if (!ccPrices) {
-                document.getElementById('error').innerHTML = 'CryptoCompare 即時價格失敗，重試或檢查網路。';
+                document.getElementById('error').innerHTML = 'API 失敗，重試。';
                 document.getElementById('error').style.display = 'block';
                 return;
             }
 
-             為每個幣種獲取歷史數據
             for (let symbol of symbols) {
                 if (!ccPrices[symbol]) {
-                    errorMsg += `無法獲取 ${symbol} 價格；`;
+                    errorMsg += `無 ${symbol} 價格；`;
                     continue;
                 }
                 const hist = await getCCHistoricalData(symbol, 168);
-                if (hist && hist.length  0) {
-                    marketData[symbol] = {
-                        price ccPrices[symbol].USD,
-                        return_1h calculateReturn(hist, 1),
-                        return_24h calculateReturn(hist, 24),
-                        return_3d calculateReturn(hist, 72),
-                        return_7d calculateReturn(hist, 168)
-                    };
-                } else {
-                    const approx3d = ccPrices[symbol].USD  0.03;
-                    marketData[symbol] = {
-                        price ccPrices[symbol].USD,
-                        return_1h { return 0, change 0 },
-                        return_24h { return 0, change 0 },
-                        return_3d { return approx3d  ccPrices[symbol].USD, change approx3d },
-                        return_7d { return approx3d  7  ccPrices[symbol].USD, change approx3d  7 }
-                    };
-                    errorMsg += `無法獲取 ${symbol} 歷史數據，用近似計算；`;
-                }
-                await new Promise(resolve = setTimeout(resolve, 2000));
+                marketData[symbol] = {
+                    price: ccPrices[symbol].USD,
+                    return_1h: calculateReturn(hist, 1),
+                    return_24h: calculateReturn(hist, 24),
+                    return_3d: calculateReturn(hist, 72),
+                    return_7d: calculateReturn(hist, 168)
+                };
+                if (!hist) errorMsg += `無 ${symbol} 歷史，用近似；`;
+                await new Promise(resolve => setTimeout(resolve, 2000));
             }
 
-            if (Object.keys(marketData).length  symbols.length) {
-                document.getElementById('error').innerHTML = `錯誤：${errorMsg} 策略繼續用可用數據。`;
+            if (errorMsg) {
+                document.getElementById('error').innerHTML = `錯誤：${errorMsg}`;
                 document.getElementById('error').style.display = 'block';
             }
 
-             換倉邏輯
-            const availableSymbols = Object.keys(marketData);
-            if (availableSymbols.length  2) {
-                document.getElementById('error').innerHTML += ' 可用數據太少，無法計算換倉。';
-                return;
-            }
-
+            // 換倉邏輯（簡化版，用 24h 為例）
+            const returns = symbols.map(s => marketData[s]?.return_24h.return || 0);
+            const avgReturn = returns.reduce((sum, r) => sum + r, 0) / returns.length;
+            const stdReturn = Math.sqrt(returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length);
+            const threshold = avgReturn + stdReturn;
+            const maxReturn = Math.max(...returns);
             let alertMessage = '';
-            let outperformerIndex = -1;
-            let maxReturn = -Infinity;
-            let triggerPeriod = '';
-            let threshold = 0;
-
-            for (let period of ['1h', '24h', '3d', '7d']) {
-                const returns = availableSymbols.map(s = marketData[s][`return_${period}`].return  0);
-                const avgReturn = returns.reduce((sum, r) = sum + r, 0)  returns.length;
-                const stdReturn = Math.sqrt(returns.reduce((sum, r) = sum + Math.pow(r - avgReturn, 2), 0)  returns.length);
-                const periodThreshold = avgReturn + stdReturn;
-                const periodMax = Math.max(...returns);
-                const maxIndex = returns.indexOf(periodMax);
-                if (periodMax  periodThreshold && periodMax  maxReturn) {
-                    maxReturn = periodMax;
-                    outperformerIndex = symbols.indexOf(availableSymbols[maxIndex]);
-                    triggerPeriod = period === '1h'  '1 小時'  period === '24h'  '24 小時'  period === '3d'  '3 天'  '7 天';
-                    threshold = periodThreshold;
-                }
-            }
-
-            if (outperformerIndex  -1) {
-                const restCoins = symbols.filter((_, i) = i !== outperformerIndex);
-                alertMessage = `⚠️ 換倉建議：賣出 ${symbols[outperformerIndex]} (${triggerPeriod}漲幅 ${(maxReturn  100).toFixed(2)}%  門檻 ${(threshold  100).toFixed(2)}%)，換成 ${restCoins.join('')} 等權重`;
+            if (maxReturn > threshold) {
+                const outperformerIndex = returns.indexOf(maxReturn);
+                const restCoins = symbols.filter((_, i) => i !== outperformerIndex);
+                alertMessage = `⚠️ 換倉建議：賣出 ${symbols[outperformerIndex]} (24h 漲幅 ${(maxReturn * 100).toFixed(2)}% > 門檻 ${(threshold * 100).toFixed(2)}%)，換成 ${restCoins.join('/')} 等權重`;
                 document.getElementById('alert').style.display = 'block';
             } else {
                 alertMessage = '無換倉建議';
@@ -175,52 +130,21 @@ body
             }
             document.getElementById('alert').innerHTML = alertMessage;
 
-             表格
-            const sortedSymbols = availableSymbols.map(s = ({
-                symbol s,
-                ...marketData[s]
-            })).sort((a, b) = (b.return_24h.return  0) - (a.return_24h.return  0));
-
-            let priceTable = `
-                table
-                    trth幣種thth價格 (USD)thth1小時漲幅thth24小時漲幅thth3天漲幅thth7天漲幅thtr
-            `;
-            sortedSymbols.forEach(coin = {
-                const isOutperformer = coin.symbol === symbols[outperformerIndex];
-                priceTable += `
-                    tr ${isOutperformer  'class=highlight'  ''}
-                        td${coin.symbol}td
-                        td${coin.price.toFixed(2)}td
-                        td${(coin.return_1h.return  100).toFixed(2)}% (${(coin.return_1h.change).toFixed(2)} USD)td
-                        td${(coin.return_24h.return  100).toFixed(2)}% (${(coin.return_24h.change).toFixed(2)} USD)td
-                        td${(coin.return_3d.return  100).toFixed(2)}% (${(coin.return_3d.change).toFixed(2)} USD)td
-                        td${(coin.return_7d.return  100).toFixed(2)}% (${(coin.return_7d.change).toFixed(2)} USD)td
-                    tr
-                `;
+            // 表格
+            const sortedSymbols = symbols.filter(s => marketData[s]).sort((a, b) => (marketData[b].return_24h.return || 0) - (marketData[a].return_24h.return || 0));
+            let priceTable = `<table><tr><th>幣種</th><th>價格 (USD)</th><th>24小時漲幅</th></tr>`;
+            sortedSymbols.forEach(coin => {
+                const r = marketData[coin].return_24h;
+                priceTable += `<tr><td>${coin}</td><td>${marketData[coin].price.toFixed(2)}</td><td>${(r.return * 100).toFixed(2)}% (${r.change.toFixed(2)} USD)</td></tr>`;
             });
-            priceTable += 'table';
+            priceTable += '</table>';
             document.getElementById('prices').innerHTML = priceTable;
 
-             更新時間
-            document.getElementById('lastUpdate').innerHTML = `最後更新 ${new Date().toLocaleString('zh-TW', { timeZone 'AsiaTokyo' })}`;
-
-             圖表
-            const chartData = availableSymbols.map((s, i) = ({
-                label s,
-                data [marketData[s].price],
-                borderColor ['#FF5555', '#1E90FF', '#32CD32', '#9932CC', '#FFA500'][i],
-                fill false
-            }));
-            if (chart) chart.destroy();
-            chart = new Chart(document.getElementById('returnsChart').getContext('2d'), {
-                type 'line',
-                data { labels [new Date().toLocaleTimeString()], datasets chartData },
-                options { responsive true, scales { y { title { display true, text '價格 (USD)' } } } }
-            });
+            document.getElementById('lastUpdate').innerHTML = `最後更新: ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Tokyo' })}`;
         }
 
         updateData();
-        setInterval(updateData, 10  60  1000);
-    script
-body
-html
+        setInterval(updateData, 10 * 60 * 1000);
+    </script>
+</body>
+</html>
