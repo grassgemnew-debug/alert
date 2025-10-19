@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>加密貨幣即時換倉提示 (修復版)</title>
+    <title>加密貨幣即時換倉提示 (含 3 天/7 天漲幅)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f9f9f9; }
@@ -24,7 +24,7 @@
 <body>
     <h1>加密貨幣即時換倉提示 (BTC/ETH/SOL/SUI/LTC)</h1>
     <div id="instructions">
-        <p><b>使用說明</b>：每 10 分鐘檢查 CryptoCompare API 的 1 小時、3 天、7 天漲幅（SUI 若無歷史用近似）。漲幅後顯示價格變動 (USD)。若某幣任一時間段遠超，顯示紅色警報。點「刷新」測試。注意：交易風險，請模擬！</p>
+        <p><b>使用說明</b>：每 10 分鐘檢查 CryptoCompare API 的 1 小時、24 小時、3 天、7 天漲幅（SUI 若無歷史用近似）。表格顯示漲幅及價格變動 (USD)。若某幣 24 小時漲幅遠超平均 + 3%，顯示紅色警報，建議賣出全倉換成其他 4 幣等權重。點「刷新」測試。注意：交易風險，請模擬！</p>
     </div>
     <button id="refresh" onclick="updateData()">立即刷新</button>
     <div id="error"></div>
@@ -38,11 +38,11 @@
         const API_KEY = '263038e60a28b70ca6275c1cc14b24bdc685299be990279849c5ada3cff3f1f4';
         let chart;
 
-        // 直接 fetch（GitHub Pages 支援）
+        // 直接 fetch API
         async function fetchAPI(endpoint) {
             try {
                 const response = await fetch(endpoint);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 return await response.json();
             } catch (e) {
                 console.error(`API error: ${e}`);
@@ -53,15 +53,23 @@
         // 即時價格
         async function getCCPriceData(symbols) {
             const url = `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${symbols.join(',')}&tsyms=USD&api_key=${API_KEY}`;
-            return await fetchAPI(url);
+            for (let retry = 0; retry < 2; retry++) {
+                const data = await fetchAPI(url);
+                if (data && !data.Response) return data;
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            return null;
         }
 
         // 歷史數據
         async function getCCHistoricalData(symbol, hours) {
             const url = `https://min-api.cryptocompare.com/data/v2/histohour?fsym=${symbol}&tsym=USD&limit=${hours}&api_key=${API_KEY}`;
-            const data = await fetchAPI(url);
-            if (data && data.Response === 'Success') {
-                return data.Data.Data.map(d => ({ time: d.time * 1000, price: d.close }));
+            for (let retry = 0; retry < 2; retry++) {
+                const data = await fetchAPI(url);
+                if (data && data.Response === 'Success') {
+                    return data.Data.Data.map(d => ({ time: d.time * 1000, price: d.close }));
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000));
             }
             return null;
         }
@@ -83,46 +91,71 @@
             const marketData = {};
             let errorMsg = '';
 
+            // 獲取即時價格
             const ccPrices = await getCCPriceData(symbols);
             if (!ccPrices) {
-                document.getElementById('error').innerHTML = 'API 失敗，重試。';
+                document.getElementById('error').innerHTML = '無法獲取即時價格，請檢查網路或 API Key。';
                 document.getElementById('error').style.display = 'block';
                 return;
             }
 
+            // 為每個幣種獲取歷史數據
             for (let symbol of symbols) {
                 if (!ccPrices[symbol]) {
-                    errorMsg += `無 ${symbol} 價格；`;
+                    errorMsg += `無法獲取 ${symbol} 價格；`;
                     continue;
                 }
                 const hist = await getCCHistoricalData(symbol, 168);
-                marketData[symbol] = {
-                    price: ccPrices[symbol].USD,
-                    return_1h: calculateReturn(hist, 1),
-                    return_24h: calculateReturn(hist, 24),
-                    return_3d: calculateReturn(hist, 72),
-                    return_7d: calculateReturn(hist, 168)
-                };
-                if (!hist) errorMsg += `無 ${symbol} 歷史，用近似；`;
+                if (hist && hist.length > 0) {
+                    marketData[symbol] = {
+                        price: ccPrices[symbol].USD,
+                        return_1h: calculateReturn(hist, 1),
+                        return_24h: calculateReturn(hist, 24),
+                        return_3d: calculateReturn(hist, 72),
+                        return_7d: calculateReturn(hist, 168)
+                    };
+                } else {
+                    const approx3d = ccPrices[symbol].USD * 0.03; // 假設 3% 近似
+                    marketData[symbol] = {
+                        price: ccPrices[symbol].USD,
+                        return_1h: { return: 0, change: 0 },
+                        return_24h: { return: 0, change: 0 },
+                        return_3d: { return: approx3d / ccPrices[symbol].USD, change: approx3d },
+                        return_7d: { return: approx3d * 7 / ccPrices[symbol].USD, change: approx3d * 7 }
+                    };
+                    errorMsg += `無法獲取 ${symbol} 歷史數據，用近似計算；`;
+                }
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
 
-            if (errorMsg) {
-                document.getElementById('error').innerHTML = `錯誤：${errorMsg}`;
+            if (Object.keys(marketData).length < symbols.length) {
+                document.getElementById('error').innerHTML = `錯誤：${errorMsg} 策略繼續用可用數據。`;
                 document.getElementById('error').style.display = 'block';
             }
 
-            // 換倉邏輯（簡化版，用 24h 為例）
-            const returns = symbols.map(s => marketData[s]?.return_24h.return || 0);
+            // 換倉邏輯（僅 24h 漲幅）
+            const availableSymbols = Object.keys(marketData);
+            if (availableSymbols.length < 2) {
+                document.getElementById('error').innerHTML += ' 可用數據太少，無法計算換倉。';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+
+            let alertMessage = '';
+            let outperformerIndex = -1;
+            let maxReturn = -Infinity;
+            let threshold = 0;
+
+            const returns = availableSymbols.map(s => marketData[s].return_24h.return || 0);
             const avgReturn = returns.reduce((sum, r) => sum + r, 0) / returns.length;
             const stdReturn = Math.sqrt(returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length);
-            const threshold = avgReturn + stdReturn;
-            const maxReturn = Math.max(...returns);
-            let alertMessage = '';
-            if (maxReturn > threshold) {
-                const outperformerIndex = returns.indexOf(maxReturn);
+            threshold = avgReturn + 0.03; // 24h 漲幅差 > 3%
+            const periodMax = Math.max(...returns);
+            const maxIndex = returns.indexOf(periodMax);
+            if (periodMax > threshold) {
+                outperformerIndex = symbols.indexOf(availableSymbols[maxIndex]);
                 const restCoins = symbols.filter((_, i) => i !== outperformerIndex);
-                alertMessage = `⚠️ 換倉建議：賣出 ${symbols[outperformerIndex]} (24h 漲幅 ${(maxReturn * 100).toFixed(2)}% > 門檻 ${(threshold * 100).toFixed(2)}%)，換成 ${restCoins.join('/')} 等權重`;
+                alertMessage = `⚠️ 換倉建議：賣出 ${symbols[outperformerIndex]} (24 小時漲幅 ${(periodMax * 100).toFixed(2)}% > 門檻 ${(threshold * 100).toFixed(2)}%)，換成 ${restCoins.join('/')} 等權重`;
                 document.getElementById('alert').style.display = 'block';
             } else {
                 alertMessage = '無換倉建議';
@@ -130,17 +163,48 @@
             }
             document.getElementById('alert').innerHTML = alertMessage;
 
-            // 表格
-            const sortedSymbols = symbols.filter(s => marketData[s]).sort((a, b) => (marketData[b].return_24h.return || 0) - (marketData[a].return_24h.return || 0));
-            let priceTable = `<table><tr><th>幣種</th><th>價格 (USD)</th><th>24小時漲幅</th></tr>`;
+            // 表格（含 3 天/7 天漲幅）
+            const sortedSymbols = availableSymbols.map(s => ({
+                symbol: s,
+                ...marketData[s]
+            })).sort((a, b) => (b.return_24h.return || 0) - (a.return_24h.return || 0));
+
+            let priceTable = `
+                <table>
+                    <tr><th>幣種</th><th>價格 (USD)</th><th>1小時漲幅</th><th>24小時漲幅</th><th>3天漲幅</th><th>7天漲幅</th></tr>
+            `;
             sortedSymbols.forEach(coin => {
-                const r = marketData[coin].return_24h;
-                priceTable += `<tr><td>${coin}</td><td>${marketData[coin].price.toFixed(2)}</td><td>${(r.return * 100).toFixed(2)}% (${r.change.toFixed(2)} USD)</td></tr>`;
+                const isOutperformer = coin.symbol === symbols[outperformerIndex];
+                priceTable += `
+                    <tr ${isOutperformer ? 'class="highlight"' : ''}>
+                        <td>${coin.symbol}</td>
+                        <td>${coin.price.toFixed(2)}</td>
+                        <td>${(coin.return_1h.return * 100).toFixed(2)}% (${coin.return_1h.change.toFixed(2)} USD)</td>
+                        <td>${(coin.return_24h.return * 100).toFixed(2)}% (${coin.return_24h.change.toFixed(2)} USD)</td>
+                        <td>${(coin.return_3d.return * 100).toFixed(2)}% (${coin.return_3d.change.toFixed(2)} USD)</td>
+                        <td>${(coin.return_7d.return * 100).toFixed(2)}% (${coin.return_7d.change.toFixed(2)} USD)</td>
+                    </tr>
+                `;
             });
             priceTable += '</table>';
             document.getElementById('prices').innerHTML = priceTable;
 
+            // 更新時間
             document.getElementById('lastUpdate').innerHTML = `最後更新: ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Tokyo' })}`;
+
+            // 圖表
+            const chartData = availableSymbols.map((s, i) => ({
+                label: s,
+                data: [marketData[s].price],
+                borderColor: ['#FF5555', '#1E90FF', '#32CD32', '#9932CC', '#FFA500'][i],
+                fill: false
+            }));
+            if (chart) chart.destroy();
+            chart = new Chart(document.getElementById('returnsChart').getContext('2d'), {
+                type: 'line',
+                data: { labels: [new Date().toLocaleTimeString()], datasets: chartData },
+                options: { responsive: true, scales: { y: { title: { display: true, text: '價格 (USD)' } } } }
+            });
         }
 
         updateData();
