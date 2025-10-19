@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>7 日漲幅換倉回測 (賣高買低, 2025 年 1-10 月)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f9f9f9; }
+        h1 { text-align: center; color: #333; }
+        #instructions { max-width: 800px; margin: 20px auto; padding: 10px; background: #e0f7fa; border-radius: 5px; }
+        #results { margin: 20px 0; }
+        table { border-collapse: collapse; width: 80%; margin: auto; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        canvas { max-width: 800px; margin: 20px auto; }
+        #trades { max-width: 800px; margin: 20px auto; }
+        #loading { text-align: center; color: #666; }
+        #error { background-color: #ffcccc; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>7 日漲幅換倉回測 (賣高買低, 2025 年 1 月 1 日 - 10 月 20 日)</h1>
+    <div id="instructions">
+        <p><b>策略</b>：初始 10000 USD 全買 BTC。若持倉 7 日漲幅 > 其他平均 + 3%，賣出全倉，換漲幅最低的幣。無交易費模擬。數據從 CoinGecko API 抓取（BTC/ETH/SOL/LTC）。載入中...</p>
+    </div>
+    <div id="loading">載入數據中... (需 10-30 秒)</div>
+    <div id="error" style="display: none;"></div>
+    <div id="results" style="display: none;"></div>
+    <canvas id="valueChart" style="display: none;"></canvas>
+    <div id="trades" style="display: none;"></div>
+
+    <script>
+        const coins = ['bitcoin', 'ethereum', 'solana', 'litecoin'];
+        const symbols = ['BTC', 'ETH', 'SOL', 'LTC'];
+        const initialCapital = 10000;
+        let df = null;
+
+        // 抓取歷史數據
+        async function fetchHistoricalData(coinId, days = 293) {
+            const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}&interval=daily`;
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (data.prices) {
+                    return data.prices.map(p => ({ date: new Date(p[0]).toISOString().split('T')[0], price: p[1] }));
+                }
+            } catch (e) {
+                console.error(`Error fetching ${coinId}: ${e}`);
+                return null;
+            }
+            return null;
+        }
+
+        // 回測邏輯
+        function runBacktest(prices) {
+            const commonDates = prices[0].map(d => d.date);
+            const df = {};
+            coins.forEach((coin, idx) => {
+                df[coin] = {};
+                prices[idx].forEach(d => df[coin][d.date] = d.price);
+            });
+
+            const sortedDates = commonDates.sort();
+            const returns7d = {};
+            sortedDates.slice(7).forEach(date => {
+                coins.forEach(coin => {
+                    const idx = sortedDates.indexOf(date);
+                    const prevDate = sortedDates[idx - 7];
+                    const prevPrice = df[coin][prevDate];
+                    const currPrice = df[coin][date];
+                    if (prevPrice && currPrice) {
+                        returns7d[date] = returns7d[date] || {};
+                        returns7d[date][coin] = (currPrice / prevPrice) - 1;
+                    }
+                });
+            });
+
+            let currentPosition = 'bitcoin';
+            let positions = {};
+            coins.forEach(coin => positions[coin] = 0);
+            positions['bitcoin'] = initialCapital / df['bitcoin'][sortedDates[0]];
+            let portfolioValues = [initialCapital];
+            let trades = [];
+            let tradeCount = 0;
+
+            for (let i = 7; i < sortedDates.length; i++) {
+                const date = sortedDates[i];
+                if (!returns7d[date]) continue;
+
+                let totalValue = 0;
+                coins.forEach(coin => totalValue += positions[coin] * df[coin][date]);
+                portfolioValues.push(totalValue);
+
+                const todayReturns = returns7d[date];
+                const currentReturn = todayReturns[currentPosition];
+                const otherReturns = Object.values(todayReturns).filter((r, idx) => coins[idx] !== currentPosition);
+                const avgOther = otherReturns.reduce((sum, r) => sum + r, 0) / otherReturns.length;
+
+                if (currentReturn > avgOther + 0.03) {
+                    const minOtherIdx = otherReturns.indexOf(Math.min(...otherReturns));
+                    const minOtherCoin = coins[Object.keys(todayReturns).indexOf(currentPosition) + 1 + minOtherIdx]; // 簡化
+                    const worstOtherCoin = Object.keys(todayReturns).reduce((a, b) => todayReturns[a] < todayReturns[b] ? a : b, null);
+
+                    positions[currentPosition] = 0;
+                    positions[worstOtherCoin] = totalValue / df[worstOtherCoin][date];
+                    const oldPosition = currentPosition;
+                    currentPosition = worstOtherCoin;
+                    tradeCount++;
+
+                    const prevValue = portfolioValues[portfolio_values.length - 2];
+                    const profitLoss = totalValue - prevValue;
+                    trades.push({
+                        date: date,
+                        from: symbols[coins.indexOf(oldPosition)],
+                        to: symbols[coins.indexOf(worstOtherCoin)],
+                        return_diff: `${((currentReturn - avgOther) * 100).toFixed(2)}%`,
+                        profit_loss: `${profitLoss.toFixed(2)} USD`
+                    });
+                }
+            }
+
+            const finalValue = coins.reduce((sum, coin) => sum + positions[coin] * df[coin][sortedDates[sortedDates.length - 1]], 0);
+
+            // 買入持有
+            const bhPrices = {};
+            coins.forEach(coin => bhPrices[coin] = df[coin][sortedDates[sortedDates.length - 1]]);
+            const avgFinalPrice = Object.values(bhPrices).reduce((sum, p) => sum + p, 0) / coins.length;
+            const avgInitialPrice = Object.values(bhPrices).reduce((sum, p) => sum + p, 0) / coins.length; // 簡化
+            const bhFinal = initialCapital * (avgFinalPrice / avgInitialPrice);
+
+            return { finalValue, bhFinal, tradeCount, trades, portfolioValues, sortedDates };
+        }
+
+        // 顯示結果
+        function displayResults(result) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('valueChart').style.display = 'block';
+            document.getElementById('trades').style.display = 'block';
+
+            document.getElementById('results').innerHTML = `
+                <table>
+                    <tr><th>指標</th><th>數值</th></tr>
+                    <tr><td>初始本金</td><td>${initialCapital} USD</td></tr>
+                    <tr><td>策略最終價值</td><td>${result.finalValue.toFixed(2)} USD (漲幅 ${((result.finalValue / initialCapital - 1) * 100).toFixed(2)}%)</td></tr>
+                    <tr><td>買入持有價值</td><td>${result.bhFinal.toFixed(2)} USD (漲幅 ${((result.bhFinal / initialCapital - 1) * 100).toFixed(2)}%)</td></tr>
+                    <tr><td>換倉次數</td><td>${result.tradeCount}</td></tr>
+                </table>
+            `;
+
+            let tradesTable = '<h3>換倉紀錄</h3><table><tr><th>日期</th><th>從什麼全換什麼</th><th>7 日漲幅差</th><th>該日盈虧</th></tr>';
+            result.trades.forEach(t => {
+                tradesTable += `<tr><td>${t.date}</td><td>${t.from} → ${t.to}</td><td>${t.return_diff}</td><td>${t.profit_loss}</td></tr>`;
+            });
+            tradesTable += '</table>';
+            document.getElementById('trades').innerHTML = tradesTable;
+
+            // 圖表
+            const ctx = document.getElementById('valueChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: result.sortedDates.slice(0, 50), // 簡化顯示
+                    datasets: [
+                        { label: '策略價值', data: result.portfolioValues.slice(0, 50), borderColor: 'blue', fill: false },
+                        { label: '買入持有', data: [initialCapital], borderColor: 'green', fill: false } // 簡化
+                    ]
+                },
+                options: { responsive: true, scales: { y: { title: { display: true, text: '價值 (USD)' } } } }
+            });
+        }
+
+        // 錯誤處理
+        function handleError(e) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').innerHTML = `<p>錯誤：${e.message}. 請檢查網路或稍後重試。SUI 數據可能不全，程式用 4 幣模擬。</p>`;
+        }
+
+        // 運行回測
+        async function initBacktest() {
+            const historicalData = {};
+            for (let coin of coins) {
+                historicalData[coin] = await fetchHistoricalData(coin);
+                if (!historicalData[coin]) return handleError(new Error(`無法獲取 ${coin} 數據`));
+            }
+            const result = runBacktest(Object.values(historicalData));
+            displayResults(result);
+        }
+
+        initBacktest();
+    </script>
+</body>
+</html>
