@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加密換倉策略回測</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; text-align: center; }
+        button { padding: 10px 20px; background: #3B82F6; color: white; border: none; cursor: pointer; margin: 10px; }
+        table { border-collapse: collapse; width: 80%; margin: 10px auto; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        #results { margin: 20px 0; }
+        canvas { max-width: 100%; }
+    </style>
+</head>
+<body>
+    <h1>每日漲幅換倉策略</h1>
+    <p>從 2025-01-01 開始，10,000 USD 買 BTC，當每日漲幅差 > <input type="number" id="threshold" value="3" step="0.1" style="width: 60px;"> % 時，換到最差幣種（BTC/ETH/LTC/SUI/SOL）。</p>
+    <button onclick="runBacktest()">跑回測</button>
+    <div id="results"></div>
+    <canvas id="chart"></canvas>
+
+    <script>
+        // 模擬 2025 價格數據（真實版可連 CoinGecko API）
+        const priceData = {
+            dates: ['2025-01-01', '2025-02-01', '2025-03-01', '2025-04-01', '2025-05-01', '2025-06-01', '2025-07-01', '2025-08-01', '2025-09-01', '2025-10-21'],
+            prices: {
+                'BTC': [95200, 98000, 101000, 99000, 95000, 98000, 96000, 100000, 104000, 107369],
+                'ETH': [3800, 3900, 4100, 4000, 3700, 3900, 3600, 3800, 3950, 4015],
+                'LTC': [85, 87, 90, 88, 84, 86, 83, 88, 90, 92],
+                'SUI': [1.5, 1.8, 2.5, 3.0, 2.8, 3.2, 2.9, 3.5, 3.0, 2.61],
+                'SOL': [150, 160, 180, 170, 155, 165, 160, 175, 180, 186]
+            }
+        };
+
+        let chart;
+        function runBacktest() {
+            const threshold = parseFloat(document.getElementById('threshold').value);
+            let capital = 10000;
+            let holding = 'BTC';
+            let triggers = 0;
+            let portfolio = [capital];
+            let holdings = ['BTC'];
+            let swapDates = [];
+
+            for (let i = 1; i < priceData.dates.length; i++) {
+                let returns = {};
+                for (let coin of ['BTC', 'ETH', 'LTC', 'SUI', 'SOL']) {
+                    let prev = priceData.prices[coin][i - 1];
+                    let curr = priceData.prices[coin][i];
+                    returns[coin] = (curr - prev) / prev * 100;
+                }
+
+                let maxCoin = Object.keys(returns).reduce((a, b) => returns[a] > returns[b] ? a : b);
+                let minCoin = Object.keys(returns).reduce((a, b) => returns[a] < returns[b] ? a : b);
+                let spread = returns[maxCoin] - returns[minCoin];
+
+                capital *= priceData.prices[holding][i] / priceData.prices[holding][i - 1];
+                portfolio.push(capital);
+
+                if (spread > threshold) {
+                    capital *= priceData.prices[minCoin][i] / priceData.prices[maxCoin][i];
+                    holding = minCoin;
+                    triggers++;
+                    swapDates.push(i);
+                }
+                holdings.push(holding);
+            }
+
+            // 結果展示
+            document.getElementById('results').innerHTML = `
+                <p>最終資本: ${capital.toFixed(2)} USD (回報: ${((capital / 10000 - 1) * 100).toFixed(2)}%)</p>
+                <p>換倉次數: ${triggers}</p>
+                <table>
+                    <tr><th>幣種</th><th>起始價 (USD)</th><th>結束價 (USD)</th><th>漲幅</th></tr>
+                    <tr><td>BTC</td><td>95,200</td><td>107,369</td><td>+12.72%</td></tr>
+                    <tr><td>ETH</td><td>3,800</td><td>4,015</td><td>+5.66%</td></tr>
+                    <tr><td>LTC</td><td>85</td><td>92</td><td>+8.24%</td></tr>
+                    <tr><td>SUI</td><td>1.5</td><td>2.61</td><td>+74.00%</td></tr>
+                    <tr><td>SOL</td><td>150</td><td>186</td><td>+24.00%</td></tr>
+                </table>
+            `;
+
+            // 圖表
+            const ctx = document.getElementById('chart').getContext('2d');
+            if (chart) chart.destroy();
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: priceData.dates,
+                    datasets: [
+                        {
+                            label: '策略資產 (USD)',
+                            data: portfolio,
+                            borderColor: '#3B82F6',
+                            fill: false
+                        },
+                        {
+                            label: 'BTC 基準',
+                            data: priceData.prices['BTC'].map(p => 10000 * p / priceData.prices['BTC'][0]),
+                            borderColor: '#EF4444',
+                            fill: false
+                        },
+                        {
+                            label: '換倉點',
+                            data: swapDates.map(i => ({ x: priceData.dates[i], y: portfolio[i] })),
+                            type: 'scatter',
+                            pointBackgroundColor: '#10B981',
+                            pointRadius: 6
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: '資產價值 (USD)' }, beginAtZero: false },
+                        x: { title: { display: true, text: '日期 (2025)' } }
+                    },
+                    plugins: { title: { display: true, text: '換倉策略回測: 2025-01-01 ~ 10-21' } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
